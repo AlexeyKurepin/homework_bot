@@ -9,21 +9,14 @@ import requests
 import telegram
 from dotenv import load_dotenv
 
+from settings import ENDPOINT, HOMEWORK_STATUSES, RETRY_TIME
+
 load_dotenv()
 
 PRACTICUM_TOKEN = os.getenv('practicum')
 TELEGRAM_TOKEN = os.getenv('telegram')
 TELEGRAM_CHAT_ID = os.getenv('chat')
-
-RETRY_TIME = 600
-ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
-
-HOMEWORK_STATUSES = {
-    'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
-    'reviewing': 'Работа взята на проверку ревьюером.',
-    'rejected': 'Работа проверена: у ревьюера есть замечания.'
-}
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -38,20 +31,26 @@ def send_message(bot, message):
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logger.info(f'Сообщение отправлено в Telegram {message}.')
-    except Exception:
-        logger.error('Сбой при отправке сообщения в Telegram.')
+    except telegram.TelegramError as error:
+        logger.error(f'Сбой при отправке сообщения в Telegram {error}.')
 
 
 def get_api_answer(current_timestamp):
     """Получаем данные по API от Яндекс.Практикума о статусе домашки."""
     timestamp = current_timestamp or int(time.time())
     params = {'from_date': timestamp}
-    response = requests.get(ENDPOINT, headers=HEADERS, params=params)
+    try:
+        response = requests.get(ENDPOINT, headers=HEADERS, params=params)
+    except Exception:
+        logger.error('Сбой при отправке запроса к API.')
     if response.status_code != HTTPStatus.OK:
         logger.error('Ответ по API не получен')
         raise Exception('Ответ по API не получен')
-    response = response.json()
-    return response
+    try:
+        response = response.json()
+        return response
+    except Exception:
+        logger.error('Формат ответа не соответствует ожидаемому.')
 
 
 def check_response(response):
@@ -76,17 +75,17 @@ def parse_status(homework):
         raise KeyError('Ответ API не содержит ключ \'status\'')
     homework_name = homework.get('homework_name')
     homework_status = homework.get('status')
+    if homework_status not in HOMEWORK_STATUSES.keys():
+        logger.error('Ключ \'status\' не содержится в словаре.')
+        raise KeyError('Ключ \'status\' не содержится в словаре.')
     verdict = HOMEWORK_STATUSES[homework_status]
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def check_tokens():
     """Проверяем доступность токенов и chat_id."""
-    if (PRACTICUM_TOKEN is not None or TELEGRAM_TOKEN is not None
-            or TELEGRAM_CHAT_ID is not None):
-        return True
-    else:
-        return False
+    tokens = (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
+    return all(tokens)
 
 
 def main():
